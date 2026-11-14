@@ -1,6 +1,6 @@
 /// <reference types="node" />
 import assert from "node:assert/strict"
-import { badIfaceName, behind, byName, changes, configFields, configForm, configOverrides, configSections, configValues, currentIface, fits, GIB, groupsOf, ifaceChoice, ifaceSpec, inGroup, loopbackOrigin, outdatedAgents, provisioningSite, provisionRefusal, shortAddress, trafficCorrection, upload, CHUNK } from "./api.ts"
+import { badIfaceName, behind, byName, changes, configFields, configForm, configOverrides, configSections, configValues, currentIface, fits, GIB, groupsOf, ifaceChoice, ifaceSpec, inGroup, loopbackOrigin, outdatedAgents, provisioningSite, provisionRefusal, shellQuote, shortAddress, trafficCorrection, upload, CHUNK } from "./api.ts"
 import { addMonths } from "./format.ts"
 
 // The same results as the hub's roll-over, which uses chrono's checked_add_months.
@@ -14,7 +14,7 @@ assert.deepEqual(changes({ public: true, price: 5 }, { price: 20 }), { price: 20
 assert.deepEqual(changes({ total_rx: "100", month_tx: "2" }, { total_rx: "100", month_tx: "3" }), { month_tx: "3" })
 assert.deepEqual(changes({ expires_at: "2030-01-01" as string | null }, { expires_at: null }), { expires_at: null })
 assert.equal(provisioningSite("https://monitor.example.com:8443/"), "https://monitor.example.com:8443")
-for (const site of ["http://monitor.example.com", "https://127.0.0.1", "https://[::1]", "https://2130706433", "https://0x7f000001", "https://localhost", "https://user@monitor.example.com", "https://monitor.example.com/path"]) {
+for (const site of ["http://monitor.example.com", "https://127.0.0.1", "https://[::1]", "https://2130706433", "https://0x7f000001", "https://localhost", "https://user@monitor.example.com", "https://monitor.example.com/path?x=1", "https://monitor.example.com/path#x"]) {
   assert.equal(provisioningSite(site), "", site)
 }
 // A tunnelled panel: the hub allows it alongside --site, so the panel must read
@@ -138,6 +138,11 @@ assert.deepEqual(
   [["通用", ["a"]], ["外观", ["b"]]],
 )
 
+
+// A path belongs to the agent's server URL, not just to the panel URL.
+assert.equal(provisioningSite("https://monitor.example.com/monitor/nested/"), "https://monitor.example.com/monitor/nested")
+assert.equal(provisionRefusal("https://monitor.example.com", "https://monitor.example.com/monitor"), "")
+assert.equal(shellQuote("https://example.com/a'b/$path"), "'https://example.com/a'\"'\"'b/$path'")
 // The same list from any starting order: 日本 (ri) before 香港 (xiang) by
 // pinyin, Latin before Chinese.
 const named = [

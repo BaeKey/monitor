@@ -63,7 +63,8 @@ pub struct Theme {
 
 pub async fn serve(State(app): State<Shared>, headers: HeaderMap, uri: Uri) -> Response {
     let known = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok());
-    respond(&app, uri.path().trim_start_matches('/'), uri.query(), known, &|html| stamp_icons(&app, html))
+    let path = uri.path().trim_start_matches('/');
+    respond(&app, path, uri.query(), known, &|html| shell(&app, html, path.starts_with("admin/")))
 }
 
 /// What `serve` answers for `path`. `shell` rewrites the HTML shell on its way
@@ -89,8 +90,8 @@ fn respond(app: &App, path: &str, query: Option<&str>, known: Option<&str>, shel
     // filed the moment a navigation starts. Renamed first, the entry kept the
     // icon it last had and flashed it on every visit.
     if path == "admin" || path == "admin/" {
-        let first = "/admin/nodes";
-        return Redirect::to(&query.map_or(first.to_owned(), |q| format!("{first}?{q}"))).into_response();
+        let first = app.with_base("/admin/nodes");
+        return Redirect::to(&query.map_or(first.clone(), |q| format!("{first}?{q}"))).into_response();
     }
     if let Some(path) = path.strip_prefix("admin/") {
         return embedded::<AdminAssets>(
@@ -110,6 +111,21 @@ fn respond(app: &App, path: &str, query: Option<&str>, known: Option<&str>, shel
     embedded::<DefaultThemeAssets>(path, "默认主题缺失，运行 scripts/theme.sh", known, shell)
 }
 
+/// The admin build uses relative assets; its base must point at admin/, not
+/// the site root (which belongs to the public theme). Inject before any URL is
+/// read, and before `asset` computes the shell's ETag. Public themes keep their
+/// own assets and can opt into relative URLs without changing the host again.
+fn shell(app: &App, html: Vec<u8>, admin: bool) -> Vec<u8> {
+    let html = stamp_icons(app, html);
+    let text = match String::from_utf8(html) {
+        Ok(text) => text,
+        Err(e) => return e.into_bytes(),
+    };
+    let base = app.with_base(if admin { "/admin/" } else { "/" });
+    let base = base.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;").replace('>', "&gt;");
+    text.replacen("<head>", &format!("<head><base href=\"{base}\">"), 1).into_bytes()
+}
+
 /// Names each icon in an HTML shell after the bytes served for it -- the ETag,
 /// which is their digest -- as the build already names everything under
 /// `assets/`. The URL a theme writes is fixed while what it serves is not: a
@@ -123,14 +139,20 @@ fn stamp_icons(app: &App, html: Vec<u8>) -> Vec<u8> {
         Err(e) => return e.into_bytes(),
     };
     for path in ["favicon.svg", "admin/favicon.svg", "apple-touch-icon.png", "admin/apple-touch-icon.png"] {
-        let quoted = format!("\"/{path}\"");
-        if !text.contains(&quoted) {
-            continue;
+        for prefix in ["/", "./"] {
+            let quoted = format!("\"{prefix}{path}\"");
+            if !text.contains(&quoted) {
+                continue;
+            }
+            let served = respond(app, path, None, None, &|html| html);
+            let Some(etag) = served.headers().get(header::ETAG).and_then(|v| v.to_str().ok()) else {
+                continue;
+            };
+            text = text.replace(
+                &quoted,
+                &format!("\"{prefix}{path}?v={}\"", etag.trim_matches('"').get(..8).unwrap_or(etag)),
+            );
         }
-        let served = respond(app, path, None, None, &|html| html);
-        let Some(etag) = served.headers().get(header::ETAG).and_then(|v| v.to_str().ok()) else { continue };
-        text = text
-            .replace(&quoted, &format!("\"/{path}?v={}\"", etag.trim_matches('"').get(..8).unwrap_or(etag)));
     }
     text.into_bytes()
 }
@@ -1050,5 +1072,62 @@ mod tests {
         assert!(outside.exists(), "the symlink's target survives");
         remove(&themes, "aurora").unwrap();
         assert!(!themes.join("aurora").exists());
+    }
+    #[tokio::test]
+    async fn subpath_shells_redirects_and_validators_follow_the_public_url() {
+        let mut app = App::for_test(crate::db::Db::open(":memory:").unwrap());
+        let html = br#"<html><head><link rel="icon" href="./favicon.svg"><script src="./assets/app.js"></script></head></html>"#;
+        for (site, prefix) in [
+            ("", ""),
+            ("https://example.com/", ""),
+            ("https://example.com/monitor/", "/monitor"),
+            ("https://example.com/a/b", "/a/b"),
+        ] {
+            app.site = site.to_owned();
+            assert_eq!(app.base_path(), prefix);
+            let text = String::from_utf8(shell(&app, html.to_vec(), true)).unwrap();
+            assert!(text.contains(&format!("<head><base href=\"{prefix}/admin/\">")));
+            assert!(text.contains("./favicon.svg?v="));
+            assert!(text.contains("src=\"./assets/app.js\""));
+            let public = String::from_utf8(shell(&app, html.to_vec(), false)).unwrap();
+            assert!(public.contains(&format!("<base href=\"{prefix}/\">")));
+
+            let response = page("index.html", html.to_vec(), None, &|h| shell(&app, h, true));
+            let tag = response.headers()[header::ETAG].to_str().unwrap().to_owned();
+            assert_eq!(
+                page("index.html", html.to_vec(), Some(&tag), &|h| shell(&app, h, true)).status(),
+                StatusCode::NOT_MODIFIED
+            );
+            assert_eq!(
+                page("index.html", html.to_vec(), Some(&tag), &|h| shell(&app, h, false)).status(),
+                StatusCode::OK,
+                "the base is part of the ETag"
+            );
+            for entry in ["admin", "admin/"] {
+                let response = respond(&app, entry, Some("login_error=reason"), None, &|h| h);
+                assert_eq!(
+                    response.headers()[header::LOCATION],
+                    format!("{prefix}/admin/nodes?login_error=reason")
+                );
+            }
+        }
+
+        // URL text must not become HTML or a protocol-relative redirect.
+        app.site = "https://example.com/a&b/\"<tag>".into();
+        let text = String::from_utf8(shell(&app, html.to_vec(), true)).unwrap();
+        assert!(text.contains("/a&amp;b/%22%3Ctag%3E/admin/"));
+        app.site = "https://example.com//other.example".into();
+        assert_eq!(app.with_base("/admin/nodes"), "/admin/nodes");
+
+        // Exercise the real embedded admin shell, not just an artificial HTML.
+        app.site = "https://example.com/monitor".into();
+        let response =
+            serve(State(std::sync::Arc::new(app)), HeaderMap::new(), "/admin/settings".parse().unwrap())
+                .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = std::str::from_utf8(&body).unwrap();
+        assert!(body.contains("<base href=\"/monitor/admin/\">"));
+        assert!(body.contains("./assets/"));
     }
 }

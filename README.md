@@ -23,3 +23,64 @@
 ```
 agent (Linux)  ──WebSocket / JSON-RPC 2.0──▶  hub (axum + SQLite)  ──▶  后台 + 状态页
 ```
+
+## 子路径部署（hub 与管理后台）
+
+例如将后台部署到 `https://example.com/monitor/admin/`，启动时指定完整的公开地址：
+
+```sh
+monitor-hub --listen 127.0.0.1:28080 --site https://example.com/monitor
+# 使用安装器时也可传入：sudo sh install-hub.sh --site https://example.com/monitor
+```
+
+支持多层子路径，`--site` 末尾斜杠可省略；不要包含查询参数或 URL 片段。
+**反向代理必须去掉 `/monitor` 前缀**，hub 内部仍使用 `/admin/`、`/api/` 等原有路由。
+不设置子路径时保持原有部署方式。前端无须为不同子路径重新构建。
+
+### Caddy
+
+```caddyfile
+example.com {
+    redir /monitor /monitor/ 308
+    handle_path /monitor/* {
+        reverse_proxy 127.0.0.1:28080
+    }
+}
+```
+
+### nginx
+
+以下放入已配置 TLS 的 `server` 中。`map` 放在 `http` 中，以同时支持普通请求和 agent / 后台 WebSocket：
+
+```nginx
+# http 中
+map $http_upgrade $monitor_connection {
+    default upgrade;
+    ''      close;
+}
+
+# TLS server 中
+location = /monitor {
+    return 308 /monitor/$is_args$args;
+}
+location /monitor/ {
+    # 尾斜杠不能省略：用 / 替换 /monitor/。
+    proxy_pass http://127.0.0.1:28080/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $monitor_connection;
+    client_max_body_size 8m;
+    proxy_read_timeout 300s;
+}
+```
+
+后台生成的 agent 安装命令和 GitHub OAuth 回调地址都会包含子路径。
+GitHub OAuth App 的 **Authorization callback URL** 应填写
+`https://example.com/monitor/api/auth/github/callback`。
+现有根路径 agent 连接方式不变；迁移到子路径时需要把 agent 的服务器地址同步改为带子路径的 URL。
+
+本次仅适配 hub 和内置管理后台，**未修改内置或第三方公开页主题**。
+公开页能否在子路径下完整运行仍取决于主题自身是否使用兼容子路径的资源、API、WebSocket 和导航地址；
+不兼容的主题需要单独适配，不能仅靠反向代理修复。

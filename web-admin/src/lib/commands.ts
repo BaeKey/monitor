@@ -1,18 +1,18 @@
-import { provisioningSite } from "@/lib/api"
+import { provisioningSite, shellQuote } from "./api.ts"
 
 // Each command runs the hub's own install.sh and is offered only on an https
 // domain entry. `args` receives that entry, which the agent is also given as
 // --server.
 function scriptCommand(site: string, args: (site: string) => string[]) {
   site = provisioningSite(site)
-  return site && `curl -fsSL ${site}/install.sh | sh -s -- ${args(site).join(" ")}`
+  return site && `curl -fsSL ${shellQuote(site + "/install.sh")} | sh -s -- ${args(site).join(" ")}`
 }
 
 // Built here rather than fetched: the install dialog reads the token on its own,
 // so viewing an install command is a read rather than an action. Reissuing one to
 // display it would take the running agent offline.
 export function installCommand(site: string, token: string, seconds: number | undefined, iface: string | undefined) {
-  return scriptCommand(site, (s) => [`--server ${s}`, `--token ${token}`, ...intervalArg(seconds), ...ifaceArg(iface)])
+  return scriptCommand(site, (s) => [`--server ${shellQuote(s)}`, `--token ${token}`, ...intervalArg(seconds), ...ifaceArg(iface)])
 }
 
 // Left out untouched, as an untouched --iface is: a rerun then keeps what the
@@ -32,7 +32,7 @@ function ifaceArg(iface: string | undefined) {
 // own, so unlike an install command this text is no one's credential and can be
 // sent to every machine as it is.
 export function registerCommand(site: string, key: string, seconds: number | undefined, iface: string | undefined) {
-  return scriptCommand(site, (s) => [`--server ${s}`, `--register ${key}`, ...intervalArg(seconds), ...ifaceArg(iface)])
+  return scriptCommand(site, (s) => [`--server ${shellQuote(s)}`, `--register ${key}`, ...intervalArg(seconds), ...ifaceArg(iface)])
 }
 
 // Carries no token, so it is the same for every node and remains valid after the

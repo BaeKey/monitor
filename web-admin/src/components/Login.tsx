@@ -1,3 +1,4 @@
+import { withBase } from "@/lib/base"
 import { useState } from "react"
 
 import { Button } from "@/components/ui/button"
@@ -56,7 +57,7 @@ export function Login({ github, onDone }: { github: boolean; onDone: () => void 
         {github && (
           <>
             <Button asChild variant="outline" className="w-full">
-              <a href="/api/auth/github">
+              <a href={withBase("/api/auth/github")}>
                 <GithubMark /> 使用 GitHub 登录
               </a>
             </Button>

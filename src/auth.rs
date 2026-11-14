@@ -281,7 +281,7 @@ pub async fn github_callback(
         Err(e) => return sign_in_failed(&app, &headers, e),
     };
     crate::notify::signed_in(&app, &format!("GitHub {user}"), client_ip(&app, &headers, peer.ip()));
-    with_cookies(Redirect::to("/admin/nodes"), [clear_state(&app, &headers), session])
+    with_cookies(Redirect::to(&app.with_base("/admin/nodes")), [clear_state(&app, &headers), session])
 }
 
 /// Redirects the browser back to the sign-in page with the reason, rather than
@@ -292,7 +292,7 @@ fn sign_in_failed(app: &App, headers: &HeaderMap, e: anyhow::Error) -> Response 
     // the redirect.
     warn!("GitHub sign-in rejected: {e:#}");
     let reason = e.downcast_ref::<Shown>().map_or(crate::api::INTERNAL, |shown| shown.0.as_str());
-    let target = format!("/admin/nodes?login_error={}", urlencode(reason));
+    let target = format!("{}?login_error={}", app.with_base("/admin/nodes"), urlencode(reason));
     with_cookies(Redirect::to(&target), [clear_state(app, headers), String::new()])
 }
 
@@ -744,6 +744,17 @@ mod tests {
         let reason = "no allowed GitHub users configured (a&b=c)";
         let back = parse(&format!("error={}", urlencode(reason))).expect("a reason must parse");
         assert_eq!(back.error.as_deref(), Some(reason), "the whole reason comes back");
+    }
+
+    #[tokio::test]
+    async fn failed_oauth_returns_to_the_subpath_panel() {
+        let mut app = App::for_test(crate::db::Db::open(":memory:").unwrap());
+        app.site = "https://example.com/monitor/nested/".into();
+        let app = std::sync::Arc::new(app);
+        let query = serde_urlencoded::from_str("error=access_denied").unwrap();
+        let response = github_callback(State(app), peer(), HeaderMap::new(), Query(query)).await;
+        let to = response.headers()[header::LOCATION].to_str().unwrap();
+        assert!(to.starts_with("/monitor/nested/admin/nodes?login_error="), "{to}");
     }
 
     /// A session cookie's round trip: the flags it is issued with, sharing a

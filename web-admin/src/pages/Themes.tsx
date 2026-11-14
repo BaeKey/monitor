@@ -1,3 +1,4 @@
+import { withBase } from "@/lib/base"
 import { useEffect, useRef, useState } from "react"
 import { Download, Palette, RefreshCw, SlidersHorizontal, Trash2, Upload } from "lucide-react"
 import { toast } from "sonner"
@@ -366,7 +367,7 @@ export function Themes() {
             {theme.preview && (
               <button type="button" title="查看完整预览图" className="cursor-zoom-in" onClick={() => setZoomed(theme)}>
                 <img
-                  src={`/api/themes/${theme.short}/preview`}
+                  src={withBase(`/api/themes/${theme.short}/preview`)}
                   alt={`${theme.name} 预览图`}
                   className="aspect-video w-full rounded-md border object-cover object-top"
                 />
@@ -430,7 +431,7 @@ export function Themes() {
               <DialogDescription>{zoomed.author} · {zoomed.version}</DialogDescription>
             </DialogHeader>
             <img
-              src={`/api/themes/${zoomed.short}/preview`}
+              src={withBase(`/api/themes/${zoomed.short}/preview`)}
               alt={`${zoomed.name} 预览图`}
               className="max-h-[80vh] w-full rounded-md border object-contain"
             />

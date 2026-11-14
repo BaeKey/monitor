@@ -1,3 +1,4 @@
+import { withBase } from "@/lib/base"
 import { useEffect, useRef, useState } from "react"
 import { Download, Upload } from "lucide-react"
 import { toast } from "sonner"
@@ -138,7 +139,7 @@ export function Data() {
           {/* The browser's own download: the file is streamed straight from
               the response, never held in the page. */}
           <Button size="sm" asChild>
-            <a href="/api/db/backup" download>
+            <a href={withBase("/api/db/backup")} download>
               <Download /> 导出备份
             </a>
           </Button>

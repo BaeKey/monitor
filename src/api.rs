@@ -805,7 +805,7 @@ pub(crate) fn https_domain(site: &str) -> Option<reqwest::Url> {
         && url.domain().is_some_and(|d| d != "localhost" && !d.ends_with(".localhost"))
         && url.username().is_empty()
         && url.password().is_none()
-        && url.path() == "/"
+        && !url.path().starts_with("//")
         && url.query().is_none()
         && url.fragment().is_none())
     .then_some(url)
@@ -825,7 +825,7 @@ pub(crate) fn https_domain(site: &str) -> Option<reqwest::Url> {
 /// `Origin` crosses all of them unchanged, and a page cannot forge its own.
 ///
 /// `--site` is measured by the same rule, because it takes this origin's place
-/// in the command: an IP or a path there is refused however the panel is
+/// in the command: an IP there is refused however the panel is
 /// reached. It also answers for the one entry this origin cannot: a panel opened
 /// over a tunnel reads `http://127.0.0.1:PORT`, which names no address a node
 /// could reach, while `--site` names one and the tunnel carries the session
@@ -841,7 +841,9 @@ fn provisioning_allowed(app: &App, headers: &HeaderMap) -> Result<(), &'static s
         debug!("provisioning refused: the request carries no readable Origin");
         return Err(ORIGIN_MISSING);
     };
-    if https_domain(origin).is_none() && !(loopback_origin(origin) && !app.site.is_empty()) {
+    if https_domain(origin).is_none_or(|url| url.path() != "/")
+        && !(loopback_origin(origin) && !app.site.is_empty())
+    {
         debug!("provisioning refused: Origin {origin:?} is not an https domain entry");
         return Err(PROVISIONING_DENIED);
     }
@@ -2474,13 +2476,20 @@ mod tests {
         assert!(app.db.nodes().unwrap().is_empty());
         assert!(app.db.get("register_key").is_none());
 
+        // Paths are public deployment prefixes, not part of the browser Origin.
+        for site in ["https://monitor.example.com/monitor", "https://monitor.example.com/a/b/"] {
+            assert!(https_domain(site).is_some());
+            assert!(provisioning_allowed(&app_with_site(site), &good).is_ok());
+        }
+
         // --site takes the origin's place in the command, so one that is not an
         // https domain refuses every entry.
         for site in [
             "http://monitor.example.com",
             "https://198.51.100.1",
             "https://user@monitor.example.com",
-            "https://monitor.example.com/path",
+            "https://monitor.example.com/path?query=1",
+            "https://monitor.example.com/path#fragment",
             "https://localhost",
             "https://hub.localhost",
         ] {

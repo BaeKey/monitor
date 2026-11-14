@@ -123,6 +123,21 @@ impl App {
         Self::new(db, String::new(), PathBuf::from("themes"), tokio::sync::mpsc::channel(1).0)
     }
 
+    /// External path only: the reverse proxy strips it before forwarding to us.
+    /// URL parsing percent-encodes characters unsafe in an HTML attribute or a
+    /// redirect. Never copy the raw --site string into the shell.
+    pub fn base_path(&self) -> String {
+        reqwest::Url::parse(&self.site)
+            .ok()
+            .filter(|url| matches!(url.scheme(), "http" | "https") && !url.path().starts_with("//"))
+            .map(|url| url.path().trim_end_matches('/').to_owned())
+            .unwrap_or_default()
+    }
+
+    pub fn with_base(&self, path: &str) -> String {
+        format!("{}{path}", self.base_path())
+    }
+
     pub fn public_page(&self) -> bool {
         self.db.get("public_page").as_deref() != Some("off")
     }
@@ -463,7 +478,8 @@ fn parse_args() -> Result<Args> {
                      --listen defaults to [::]:28080, one socket serving IPv6 and IPv4\n\
                      both; where the kernel has no dual-stack sockets it is 0.0.0.0:28080.\n\
                      --themes defaults to a themes/ directory beside the database.\n\
-                     --site is the https:// domain agents should use. Left out, the hub\n\
+                     --site is the https:// URL agents should use (an optional path is allowed).\n\
+                     For a subpath, the reverse proxy must strip that prefix. Left out, the hub\n\
                      answers on whatever ip:port it is asked, and the panel builds install\n\
                      commands from the address in the browser's bar, which behind a TLS\n\
                      reverse proxy is already right. It is needed where agents reach the\n\
@@ -749,6 +765,7 @@ async fn serve(listener: tokio::net::TcpListener, router: Router) {
         // its response on a closed window and hold the descriptor indefinitely.
         // The kernel aborts a window that stays closed, or data that nobody
         // acknowledges, after this long.
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "fuchsia"))]
         let _ = rustix::net::sockopt::set_tcp_user_timeout(&stream, STALL.as_millis() as u32);
         let service = router.clone().map_request(move |mut req: axum::http::Request<Incoming>| {
             req.extensions_mut().insert(ConnectInfo(peer));
@@ -777,6 +794,7 @@ async fn serve(listener: tokio::net::TcpListener, router: Router) {
 /// How long the peer's receive window may stay shut, or data go unacknowledged,
 /// before the kernel drops the connection. The push stream gives up on a send
 /// after 10 s of its own; this bounds the rest.
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "fuchsia"))]
 const STALL: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// How long a stop waits for in-flight requests.

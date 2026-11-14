@@ -1,3 +1,4 @@
+import { socketURL, withBase } from "./base.ts"
 import { useEffect, useState } from "react"
 
 export type Metrics = {
@@ -275,13 +276,18 @@ export function shortAddress(address: string): string {
 /** Where a shown address comes from, which the panel gives as its tooltip. */
 export type Source = "manual" | "interface" | "exit" | "connection"
 
-/** Installation commands require a TLS origin with a domain, never an IP. */
+/** Quote a URL before it is pasted into a shell: paths may contain $ or '. */
+export function shellQuote(value: string): string {
+  return "'" + value.replaceAll("'", "'\"'\"'") + "'"
+}
+
+/** Installation commands require a TLS domain URL, never an IP. */
 export function provisioningSite(site: string): string {
   try {
     const u = new URL(site)
     return u.protocol === "https:" && !u.hostname.startsWith("[") && !/^\d+\.\d+\.\d+\.\d+$/.test(u.hostname)
       && u.hostname !== "localhost" && !u.hostname.endsWith(".localhost") && !u.username && !u.password
-      && u.pathname === "/" && !u.search && !u.hash ? u.origin : ""
+      && !u.pathname.startsWith("//") && !u.search && !u.hash ? u.origin + u.pathname.replace(/\/+$/, "") : ""
   } catch {
     return ""
   }
@@ -430,7 +436,7 @@ async function json<T>(res: Response): Promise<T> {
 }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await send(`/api${path}`, {
+  const res = await send(withBase(`/api${path}`), {
     ...init,
     headers: init?.body ? { "content-type": "application/json", ...init?.headers } : init?.headers,
   })
@@ -463,7 +469,7 @@ export async function upload<T>(
     // the last piece lands, and `offset = 0` truncates whatever an abandoned
     // attempt left behind, so aborting here leaves the state unchanged.
     if (signal?.aborted) throw new DOMException("aborted", "AbortError")
-    const res = await send(`/api${path}?offset=${offset}&total=${file.size}`, {
+    const res = await send(withBase(`/api${path}?offset=${offset}&total=${file.size}`), {
       method: "POST",
       headers: { "content-type": "application/octet-stream" },
       body: file.slice(offset, offset + CHUNK),
@@ -526,7 +532,7 @@ export function useNodes() {
         })
     }
 
-    const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/ws`
+    const url = socketURL()
     // A hub restart closes every stream. Without reconnecting, a page that
     // outlives a deploy would remain on the fallback poll for the rest of its
     // life, refreshing at a fifth of the live rate with no indication.

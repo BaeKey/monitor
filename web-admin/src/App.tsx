@@ -1,3 +1,4 @@
+import { siteURL, stripBase, withBase } from "@/lib/base"
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react"
 import { ExternalLink, LogOut, Moon, Sun } from "lucide-react"
 import { Toaster } from "sonner"
@@ -19,12 +20,12 @@ function normalise(p: string) {
 
 function usePath() {
   const [path, setPath] = useState(() => {
-    const start = normalise(location.pathname)
-    if (start !== location.pathname) history.replaceState({}, "", start + location.search)
+    const start = normalise(stripBase(location.pathname))
+    if (withBase(start) !== location.pathname) history.replaceState({}, "", withBase(start) + location.search + location.hash)
     return start
   })
   useEffect(() => {
-    const sync = () => setPath(normalise(location.pathname))
+    const sync = () => setPath(normalise(stripBase(location.pathname)))
     addEventListener("popstate", sync)
     return () => removeEventListener("popstate", sync)
   }, [])
@@ -32,7 +33,7 @@ function usePath() {
     path,
     useCallback((next: string) => {
       const to = normalise(next)
-      history.pushState({}, "", to)
+      history.pushState({}, "", withBase(to))
       setPath(to)
     }, []),
   ] as const
@@ -144,7 +145,7 @@ export default function App() {
 
   async function signOut() {
     await api("/auth/logout", { method: "POST" }).catch(() => {})
-    location.href = "/"
+    location.href = withBase("/")
   }
 
   return (
@@ -156,14 +157,14 @@ export default function App() {
           <div className="mx-auto flex max-w-7xl items-center gap-3 px-4 py-3">
             {/* The site name is the way back to the status page, as in the
                 theme's own header. */}
-            <a href="/" className="font-semibold transition-opacity hover:opacity-70">
+            <a href={withBase("/")} className="font-semibold transition-opacity hover:opacity-70">
               {me.site_name || "Monitor"}
             </a>
             <span className="text-xs text-muted-foreground">后台</span>
             <div className="flex-1" />
             {/* The status page is a separate app, so this is a navigation. */}
             <Button variant="ghost" size="sm" asChild>
-              <a href="/">
+              <a href={withBase("/")}>
                 <ExternalLink /> 状态面板
               </a>
             </Button>
@@ -189,7 +190,7 @@ export default function App() {
               // The hub's own public URL rather than this browser's address: the
               // panel is frequently reached over a loopback port behind a proxy,
               // while the install command and OAuth callback need the real one.
-              site={me.site || location.origin}
+              site={me.site || siteURL()}
               // Why this page cannot add nodes, measured by the rule the hub applies
               // to the `Origin` it receives; empty when it can.
               refusal={provisionRefusal(location.origin, me.site)}

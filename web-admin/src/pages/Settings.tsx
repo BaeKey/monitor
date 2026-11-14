@@ -1,3 +1,4 @@
+import { withBase } from "@/lib/base"
 import { useRef } from "react"
 import { Upload } from "lucide-react"
 import { toast } from "sonner"
@@ -76,7 +77,7 @@ export function SettingsTab({ onSaved }: { onSaved: () => void }) {
       // The tab's icon is cached under its fixed URL; a new query fetches the
       // one just saved.
       const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
-      if (ok && link) link.href = `/admin/favicon.svg?${Date.now()}`
+      if (ok && link) link.href = withBase(`/admin/favicon.svg?${Date.now()}`)
     })
 
   return (
@@ -116,7 +117,7 @@ export function SettingsTab({ onSaved }: { onSaved: () => void }) {
             <div className="flex items-center gap-2">
               {!s.favicon && <span className="text-sm text-muted-foreground">默认</span>}
               <div className="flex size-9 shrink-0 items-center justify-center rounded-md border">
-                <img src={String(s.favicon || "/favicon.svg?theme")} alt="站点图标" className="size-6 object-contain" />
+                <img src={String(s.favicon || withBase("/favicon.svg?theme"))} alt="站点图标" className="size-6 object-contain" />
               </div>
               <Button size="sm" variant="outline" onClick={() => iconPicker.current?.click()}>
                 <Upload /> 选择图标
