@@ -431,12 +431,9 @@ const MAX_STREAM: u64 = MAX_EXPANDED + MAX_PADDING + (8 << 20);
 /// `serve`, and publishing is a single rename: the public page is never served
 /// from an incomplete directory. A theme being replaced is renamed aside rather
 /// than deleted, and restored if the publish cannot complete.
-///
-/// `expect` names the short the caller is replacing, where one is specified: an
-/// upload installs whatever it carries, an update may not.
-pub fn install<R: Read>(themes: &Path, archive: R, expect: Option<&str>) -> Result<Theme> {
+pub fn install<R: Read>(themes: &Path, archive: R) -> Result<Theme> {
     let staging = themes.join(format!(".staging-{}", &random_token()[..16]));
-    let installed = unpack(archive, &staging).and_then(|()| publish(themes, &staging, expect));
+    let installed = unpack(archive, &staging).and_then(|()| publish(themes, &staging));
     if installed.is_err() {
         let _ = fs::remove_dir_all(&staging);
     }
@@ -570,7 +567,7 @@ fn unpack_entries<R: Read>(archive: &mut tar::Archive<R>, into: &Path) -> Result
 
 /// Checks the unpacked directory is a theme this hub can actually serve, then
 /// moves it into place under the name its manifest asks for.
-fn publish(themes: &Path, staging: &Path, expect: Option<&str>) -> Result<Theme> {
+fn publish(themes: &Path, staging: &Path) -> Result<Theme> {
     // Source code (tar.gz) is gzip'd too, and nests everything one directory
     // down, so it fails here rather than at the magic bytes.
     let Some(manifest) = read_inside(staging, "theme.json") else {
@@ -583,12 +580,6 @@ fn publish(themes: &Path, staging: &Path, expect: Option<&str>) -> Result<Theme>
         serde_json::from_slice(&manifest).context(crate::Shown("theme.json 格式不对".into()))?;
     if !valid_short(&theme.short) {
         refuse!("theme.json 里的 short 不能作为目录名：{:?}", theme.short);
-    }
-    // An update replaces the theme it was invoked for. A package whose manifest
-    // carries a different `short` would instead install a second theme, or
-    // overwrite an unrelated one, while reporting success for the update.
-    if let Some(expected) = expect.filter(|&expected| expected != theme.short) {
-        refuse!("这个包里是主题 {:?}，不是 {expected:?}", theme.short);
     }
     // The one file `serve` requires. Without it every request falls through to
     // the built-in theme, indistinguishable from the upload having no effect.
@@ -718,7 +709,7 @@ mod tests {
             tar.into_inner().unwrap().finish().unwrap()
         };
         let headroom = MAX_EXPANDED - (manifest.len() as u64 + 1);
-        let refused = |sizes: &[u64]| install(&base, &pack(sizes)[..], None).is_err();
+        let refused = |sizes: &[u64]| install(&base, &pack(sizes)[..]).is_err();
         assert!(!refused(&[MAX_FILE]));
         assert!(refused(&[MAX_FILE + 1]));
         let full = [MAX_FILE; 7].into_iter().chain([headroom - 7 * MAX_FILE]).collect::<Vec<_>>();
@@ -761,8 +752,8 @@ mod tests {
         };
 
         // The directory is named by the manifest, never by the uploaded file.
-        let theme = install(&base, pack(&[("theme.json", manifest), ("dist/index.html", b"v1")], None), None)
-            .unwrap();
+        let theme =
+            install(&base, pack(&[("theme.json", manifest), ("dist/index.html", b"v1")], None)).unwrap();
         assert_eq!(theme.short, "aurora");
         assert_eq!(fs::read(base.join("aurora/dist/index.html")).unwrap(), b"v1");
         use std::os::unix::fs::PermissionsExt;
@@ -773,10 +764,9 @@ mod tests {
         install(
             &base,
             pack(&[("theme.json", manifest), ("dist/index.html", b"v2"), ("dist/old.js", b"x")], None),
-            None,
         )
         .unwrap();
-        install(&base, pack(&[("theme.json", manifest), ("dist/index.html", b"v3")], None), None).unwrap();
+        install(&base, pack(&[("theme.json", manifest), ("dist/index.html", b"v3")], None)).unwrap();
         assert_eq!(fs::read(base.join("aurora/dist/index.html")).unwrap(), b"v3");
         assert!(!base.join("aurora/dist/old.js").exists(), "the replaced theme must not leave files behind");
 
@@ -799,12 +789,12 @@ mod tests {
             ),
         ] {
             // A reason for the panel, never the 500 of a failure on this machine.
-            let Err(e) = install(&base, bad, None) else { panic!("a bad package installed") };
+            let Err(e) = install(&base, bad) else { panic!("a bad package installed") };
             assert!(e.downcast_ref::<crate::Shown>().is_some(), "{e:#}");
         }
         // Named as such, not left to the filesystem's refusal.
         let long = format!("dist/{}", "a".repeat(5000));
-        let Err(e) = install(&base, pack(&[("theme.json", manifest), (&long, b"x")], None), None) else {
+        let Err(e) = install(&base, pack(&[("theme.json", manifest), (&long, b"x")], None)) else {
             panic!("a path too long installed")
         };
         assert_eq!(
@@ -815,9 +805,7 @@ mod tests {
         // A download cut short says so, rather than quoting the decoder.
         pack(&[("theme.json", manifest), ("dist/index.html", b"v9")], None);
         let whole = fs::read(&archive).unwrap();
-        let Err(e) = install(&base, &whole[..whole.len() / 2], None) else {
-            panic!("half an archive installed")
-        };
+        let Err(e) = install(&base, &whole[..whole.len() / 2]) else { panic!("half an archive installed") };
         assert_eq!(e.downcast_ref::<crate::Shown>().map(|s| s.0.as_str()), Some(DAMAGED), "{e:#}");
         // Cut past tar's end marker, or with one byte changed on the way: every
         // header reads, so only the gzip checksum can refuse either.
@@ -825,7 +813,7 @@ mod tests {
         let crc = altered.len() - 8;
         altered[crc] ^= 1;
         for damaged in [&whole[..whole.len() - 4], &altered[..]] {
-            let Err(e) = install(&base, damaged, None) else { panic!("a damaged archive installed") };
+            let Err(e) = install(&base, damaged) else { panic!("a damaged archive installed") };
             assert_eq!(e.downcast_ref::<crate::Shown>().map(|s| s.0.as_str()), Some(DAMAGED), "{e:#}");
         }
         // The wrong file rather than a damaged one: a zip, or the same tar
@@ -834,7 +822,7 @@ mod tests {
         let mut plain = Vec::new();
         flate2::read::GzDecoder::new(&whole[..]).read_to_end(&mut plain).unwrap();
         for wrong in [&b"PK\x03\x04"[..], &plain[..]] {
-            let Err(e) = install(&base, wrong, None) else { panic!("a file that is not gzip installed") };
+            let Err(e) = install(&base, wrong) else { panic!("a file that is not gzip installed") };
             assert_eq!(e.downcast_ref::<crate::Shown>().map(|s| s.0.as_str()), Some(NOT_GZIP), "{e:#}");
         }
         // Source code (tar.gz): a pax global header, then the repository one
@@ -853,7 +841,7 @@ mod tests {
             source.append_data(&mut header, name, data).unwrap();
         }
         let source = source.into_inner().unwrap().finish().unwrap();
-        let Err(e) = install(&base, &source[..], None) else { panic!("a source archive installed") };
+        let Err(e) = install(&base, &source[..]) else { panic!("a source archive installed") };
         assert!(e.to_string().contains("Source code"), "{e:#}");
         // Past the end marker, padding and nothing more.
         let mut padded = tar::Builder::new(Vec::new());
@@ -864,9 +852,7 @@ mod tests {
         let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
         std::io::Write::write_all(&mut gz, &padded.into_inner().unwrap()).unwrap();
         std::io::Write::write_all(&mut gz, &vec![0; (MAX_PADDING + 1) as usize]).unwrap();
-        let Err(e) = install(&base, &gz.finish().unwrap()[..], None) else {
-            panic!("an oversized tail installed")
-        };
+        let Err(e) = install(&base, &gz.finish().unwrap()[..]) else { panic!("an oversized tail installed") };
         assert!(e.to_string().contains("tar 结尾之后"), "{e:#}");
         // A GNU long-name header declaring 400 MiB, which tar reads into memory
         // before any entry is seen: stopped at the stream budget.
@@ -881,9 +867,7 @@ mod tests {
         let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
         std::io::Write::write_all(&mut gz, &header).unwrap();
         std::io::Write::write_all(&mut gz, &vec![b'a'; (MAX_STREAM + 1) as usize]).unwrap();
-        let Err(e) = install(&base, &gz.finish().unwrap()[..], None) else {
-            panic!("a long-name bomb installed")
-        };
+        let Err(e) = install(&base, &gz.finish().unwrap()[..]) else { panic!("a long-name bomb installed") };
         assert!(e.to_string().contains("解压后超过"), "{e:#}");
 
         // None of that affected the theme being served or left a staging
@@ -901,11 +885,10 @@ mod tests {
         install(
             &base,
             pack(&[("theme.json", manifest), ("dist/index.html", b"v3"), ("preview.png", b"PNG")], None),
-            None,
         )
         .unwrap();
         assert_eq!(preview(&base, "aurora").unwrap(), b"PNG");
-        install(&base, pack(&[("theme.json", manifest), ("dist/index.html", b"v3")], None), None).unwrap();
+        install(&base, pack(&[("theme.json", manifest), ("dist/index.html", b"v3")], None)).unwrap();
         assert!(preview(&base, "aurora").is_none());
 
         // An installed copy of the built-in theme takes its place: it is read
@@ -917,7 +900,6 @@ mod tests {
         install(
             &base,
             pack(&[("theme.json", built_in), ("dist/index.html", b"d1"), ("preview.png", b"DISK")], None),
-            None,
         )
         .unwrap();
         let mut app = App::for_test(crate::db::Db::open(":memory:").unwrap());
@@ -932,20 +914,6 @@ mod tests {
         remove(&base, "default").unwrap();
         assert!(themes(&app).unwrap()[0].builtin);
         assert_ne!(preview(&base, "default"), Some(b"DISK".to_vec()));
-
-        // An update replaces the theme it targets, so a package that renamed
-        // itself is refused rather than installed alongside.
-        assert!(install(
-            &base,
-            pack(&[("theme.json", manifest), ("dist/index.html", b"v4")], None),
-            Some("nebula"),
-        )
-        .is_err());
-        assert!(!base.join("nebula").exists());
-        assert_eq!(fs::read(base.join("aurora/dist/index.html")).unwrap(), b"v3");
-        install(&base, pack(&[("theme.json", manifest), ("dist/index.html", b"v4")], None), Some("aurora"))
-            .unwrap();
-        assert_eq!(fs::read(base.join("aurora/dist/index.html")).unwrap(), b"v4");
 
         // Deletion is the way back out.
         remove(&base, "aurora").unwrap();

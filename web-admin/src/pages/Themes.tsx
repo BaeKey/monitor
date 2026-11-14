@@ -1,6 +1,6 @@
 import { withBase } from "@/lib/base"
 import { useEffect, useRef, useState } from "react"
-import { Download, Palette, RefreshCw, SlidersHorizontal, Trash2, Upload } from "lucide-react"
+import { Download, Palette, SlidersHorizontal, Trash2, Upload } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -246,26 +246,6 @@ export function Themes() {
     }
   }
 
-  // Only a theme whose manifest names a GitHub repository has a source to update
-  // from; the hub refuses anything else, and this merely hides the button.
-  const updatable = (theme: Theme) => theme.url.startsWith("https://github.com/")
-
-  async function update(theme: Theme) {
-    setBusy(`update:${theme.short}`)
-    try {
-      const { updated, version } = await api<{ updated: boolean; version: string }>(
-        `/themes/${theme.short}/update`,
-        { method: "POST" },
-      )
-      toast.success(updated ? `${theme.name} 已更新到 ${version}` : `${theme.name} 已是最新版本 ${version}`)
-      if (updated) load()
-    } catch (e) {
-      toast.error((e as Error).message)
-    } finally {
-      setBusy("")
-    }
-  }
-
   // Read on opening rather than inside the dialog, so the form starts from what
   // is saved instead of flashing the defaults first.
   async function configure(theme: Theme) {
@@ -302,9 +282,6 @@ export function Themes() {
               <p>仓库首页、Releases 页的地址都可以，总是安装最新的 release。</p>
               <p>也可以上传 release 里的 theme.tar.gz，不要选 Source code。</p>
               <p>两种方式都是同名主题整体替换。</p>
-              <p>
-                主题的 url 指向 GitHub 仓库时，卡片上的 <RefreshCw className="inline size-3" /> 检查更新，版本没变就不下载。
-              </p>
             </Help>
             <Button size="sm" variant="ghost" className="-my-1 -mr-2.5 ml-auto h-7" asChild>
               <a href="https://monitor-themes.pages.dev" target="_blank" rel="noreferrer">
@@ -389,18 +366,6 @@ export function Themes() {
                 {configFields(theme.config).length > 0 && (
                   <Button size="icon" variant="ghost" title="主题设置" aria-label="主题设置" onClick={() => configure(theme)}>
                     <SlidersHorizontal />
-                  </Button>
-                )}
-                {updatable(theme) && (
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    title="从 GitHub 更新"
-                    aria-label="从 GitHub 更新"
-                    disabled={!!busy}
-                    onClick={() => update(theme)}
-                  >
-                    <RefreshCw className={busy === `update:${theme.short}` ? "animate-spin" : ""} />
                   </Button>
                 )}
                 {/* The built-in theme is served from the binary and has no

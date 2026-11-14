@@ -1,6 +1,6 @@
-import { ArrowUpCircle, Bell, Database, Palette, Radio, Server, Settings, Shield } from "lucide-react"
+import { Bell, Database, Palette, Radio, Server, Settings, Shield } from "lucide-react"
 
-import { behind, type Node, outdatedAgents } from "@/lib/api"
+import { type Node } from "@/lib/api"
 import { Data } from "@/pages/Data"
 import { Nodes } from "@/pages/Nodes"
 import { Notify } from "@/pages/Notify"
@@ -8,7 +8,6 @@ import { Ping } from "@/pages/Ping"
 import { Security } from "@/pages/Security"
 import { SettingsTab } from "@/pages/Settings"
 import { Themes } from "@/pages/Themes"
-import { Update, useVersions } from "@/pages/Update"
 
 // Each area is its own route rather than a tab, so a page can be linked to and a
 // reload returns to the same section.
@@ -20,7 +19,6 @@ const ADMIN_SECTIONS = [
   { path: "/admin/themes", label: "主题", icon: Palette },
   { path: "/admin/security", label: "安全", icon: Shield },
   { path: "/admin/settings", label: "设置", icon: Settings },
-  { path: "/admin/update", label: "更新", icon: ArrowUpCircle },
 ] as const
 
 export function Admin({
@@ -40,12 +38,6 @@ export function Admin({
   refusal: string
   reloadMe: () => void
 }) {
-  const { versions, reload } = useVersions()
-  // One dot for both; the page separates them. Absent when switched off on that
-  // page, or when the lookup failed and the page has nothing to say.
-  const updates =
-    !!versions?.notice
-    && (behind(versions.hub, versions.hub_latest) || outdatedAgents(nodes, versions.agent_latest).length > 0)
   return (
     <div className="flex flex-col gap-6 md:flex-row">
       <nav className="flex gap-1 overflow-x-auto md:w-44 md:shrink-0 md:flex-col md:overflow-visible">
@@ -62,9 +54,6 @@ export function Admin({
             >
               <Icon className="size-4" />
               {label}
-              {to === "/admin/update" && updates && (
-                <span className="ml-1 size-1.5 shrink-0 rounded-full bg-foreground md:ml-auto" title="有新版本" />
-              )}
             </button>
           )
         })}
@@ -83,8 +72,6 @@ export function Admin({
           <Security site={site} reloadMe={reloadMe} />
         ) : path === "/admin/settings" ? (
           <SettingsTab onSaved={reloadMe} />
-        ) : path === "/admin/update" ? (
-          <Update versions={versions} reload={reload} nodes={nodes} site={site} refusal={refusal} />
         ) : (
           <Nodes nodes={nodes} refresh={refresh} site={site} refusal={refusal} />
         )}
