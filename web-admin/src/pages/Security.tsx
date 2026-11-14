@@ -5,6 +5,8 @@ import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
+import { Switch } from "@/components/ui/switch"
+import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
 
 import { Field } from "@/components/common"
@@ -78,7 +80,7 @@ function Sessions({ rows, reload }: { rows: Session[]; reload: () => void }) {
 
 // The ways into this panel, on their own page: the sessions signed in, the
 // GitHub identity it trusts and the password that works when GitHub does not.
-export function Security({ site }: { site: string }) {
+export function Security({ site, reloadMe }: { site: string; reloadMe: () => void }) {
   const { s, set, save } = useSettings()
   const sessions = useSessions()
   const [password, setPassword] = useState("")
@@ -120,21 +122,31 @@ export function Security({ site }: { site: string }) {
         <Field label="允许登录的 GitHub 用户名" hint="逗号分隔。留空 = 拒绝所有人，不是放行所有人">
           <Input value={String(s.github_allowed_users ?? "")} onChange={(e) => set("github_allowed_users", e.target.value)} placeholder="GitHub 用户名" />
         </Field>
+        <div className="flex items-center justify-between gap-4 rounded-md border p-3">
+          <div className="space-y-1">
+            <Label htmlFor="password-login">允许密码登录</Label>
+            <p className="text-xs text-muted-foreground">关闭后仅允许 GitHub SSO 登录。请先确认 SSO 可用；故障时需在服务器执行 --reset-password 恢复密码入口。</p>
+          </div>
+          <Switch id="password-login" checked={s.password_login !== "off"}
+            onCheckedChange={(on) => set("password_login", on ? "on" : "off")} />
+        </div>
         <div>
           <Button
             size="sm"
-            onClick={() => {
+            onClick={async () => {
+              if (s.password_login === "off" && !window.confirm("保存后将仅允许 GitHub SSO 登录。请确认已成功测试 SSO；故障时需通过服务器命令行重置密码恢复。继续保存？")) return
               const patch: Record<string, string> = {
+                password_login: s.password_login === "off" ? "off" : "on",
                 github_client_id: String(s.github_client_id ?? ""),
                 github_allowed_users: String(s.github_allowed_users ?? ""),
               }
               if (typeof s.github_client_secret === "string" && s.github_client_secret) {
                 patch.github_client_secret = s.github_client_secret
               }
-              save(patch)
+              if (await save(patch)) reloadMe()
             }}
           >
-            保存 GitHub 设置
+            保存登录设置
           </Button>
         </div>
       </Card>

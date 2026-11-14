@@ -80,7 +80,7 @@ export function Admin({
         ) : path === "/admin/themes" ? (
           <Themes />
         ) : path === "/admin/security" ? (
-          <Security site={site} />
+          <Security site={site} reloadMe={reloadMe} />
         ) : path === "/admin/settings" ? (
           <SettingsTab onSaved={reloadMe} />
         ) : path === "/admin/update" ? (

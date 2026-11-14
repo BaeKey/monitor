@@ -975,7 +975,8 @@ fn pins(node: &mut NodePatch) -> Option<&'static str> {
 pub async fn me(State(app): State<Shared>, headers: HeaderMap) -> Json<Value> {
     Json(json!({
         "authed": authed(&app, &headers),
-        "github": app.db.get("github_client_id").is_some_and(|v| !v.is_empty()),
+        "github": app.github_configured(),
+        "password_login": app.password_login(),
         "site_name": app.db.get("site_name").unwrap_or_else(|| "Monitor".into()),
         "public_page": app.public_page(),
         // How far back a chart may reach, so a theme offers only windows the hub
@@ -1467,6 +1468,7 @@ const READABLE_SETTINGS: &[&str] = &[
     "public_page",
     "github_client_id",
     "github_allowed_users",
+    "password_login",
     "retention_days",
     "theme",
     "github_proxy",
@@ -2294,6 +2296,7 @@ fn setting_error(app: &App, key: &str, value: &Value) -> Option<String> {
         "favicon" | "touch_icon" if !value.is_empty() => {
             crate::frontend::site_icon(value).err().map(Into::into)
         }
+        "password_login" if !matches!(value, "" | "on" | "off") => Some("密码登录：取值是 on 或 off".into()),
         "admin_password" if value.len() < 12 => Some("密码至少 12 位".into()),
         "admin_password" => None,
         "origin_cdn_only" if !matches!(value, "" | "on" | "off") => {
@@ -2317,6 +2320,11 @@ pub async fn save_settings(
             return bad(&message);
         }
     }
+    // Commit the interdependent login settings together before other writes.
+    // A refused SSO-only configuration must not change the password or cookies.
+    if let Err(e) = app.db.save_login_settings(map) {
+        return fail(e);
+    }
     // Set when the password changed: the change signs every session out, and the
     // caller receives a replacement rather than being logged out by it.
     let mut reissued = String::new();
@@ -2332,11 +2340,13 @@ pub async fn save_settings(
             }
             continue;
         }
-        let saved = match key.as_str() {
-            "github_allowed_users" => app.db.set_github_allowed(value),
-            _ => app.db.set(key, value),
-        };
-        if let Err(e) = saved {
+        if matches!(
+            key.as_str(),
+            "password_login" | "github_client_id" | "github_client_secret" | "github_allowed_users"
+        ) {
+            continue;
+        }
+        if let Err(e) = app.db.set(key, value) {
             return fail(e);
         }
     }
@@ -3898,6 +3908,53 @@ mod tests {
             (0..HISTORY_SLOTS).map(|_| HISTORY_GATE.try_acquire().expect("up to the limit")).collect();
         assert_eq!(ask().await.status(), StatusCode::UNAUTHORIZED);
         drop(held);
+    }
+
+    #[tokio::test]
+    async fn sso_only_requires_complete_configuration_and_can_be_recovered() {
+        let app = std::sync::Arc::new(app());
+        let save = |body| save_settings(Admin, State(app.clone()), HeaderMap::new(), Json(body));
+        assert!(app.password_login(), "default must preserve password login");
+        assert!(!app.github_configured());
+        for patch in [
+            json!({"password_login": "off"}),
+            json!({"password_login": "off", "github_client_id": "id", "github_client_secret": "secret"}),
+            json!({"password_login": "off", "github_client_id": "id", "github_client_secret": "  ", "github_allowed_users": "alice"}),
+            json!({"password_login": false}),
+            json!({"password_login": "invalid"}),
+        ] {
+            assert_eq!(save(patch).await.status(), StatusCode::BAD_REQUEST);
+            assert!(app.password_login());
+            assert!(app.db.get("github_client_id").is_none(), "refused writes are not partial");
+        }
+        assert_eq!(
+            save(json!({
+                "password_login": "off", "github_client_id": "id", "github_client_secret": "secret",
+                "github_allowed_users": "alice",
+            }))
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert!(!app.password_login());
+        assert!(app.github_configured());
+        let Json(info) = me(State(app.clone()), HeaderMap::new()).await;
+        assert_eq!(info["password_login"], false);
+        assert_eq!(info["github"], true);
+        for key in ["github_client_id", "github_client_secret", "github_allowed_users"] {
+            assert_eq!(save(json!({key: ""})).await.status(), StatusCode::BAD_REQUEST, "{key}");
+            assert!(app.github_configured());
+        }
+        // Ordinary password changes do not undo an explicit SSO-only policy.
+        app.db.replace_password("new-hash").unwrap();
+        assert!(!app.password_login());
+        // Re-enable password login and remove SSO in the same atomic update.
+        assert_eq!(
+            save(json!({"password_login": "on", "github_client_id": ""})).await.status(),
+            StatusCode::OK
+        );
+        assert!(app.password_login());
+        assert!(!app.github_configured());
     }
 
     /// A settings write lands whole or not at all. Changing the password drops

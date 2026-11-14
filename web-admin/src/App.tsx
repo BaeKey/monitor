@@ -10,7 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { api, provisionRefusal, useNodes } from "@/lib/api"
 
-type Me = { authed: boolean; github: boolean; site_name: string; public_page: boolean; site: string }
+type Me = { authed: boolean; github: boolean; site_name: string; public_page: boolean; site: string; password_login: boolean }
 
 // `/admin` alone is not a page; it is normalised to the first section so that a
 // bookmark and the OAuth redirect both resolve to a real route.
@@ -137,7 +137,7 @@ export default function App() {
   if (!me.authed) {
     return (
       <>
-        <Login github={me.github} onDone={() => { loadMe(); refresh(); go("/admin/nodes") }} />
+        <Login github={me.github} passwordLogin={me.password_login} onDone={() => { loadMe(); refresh(); go("/admin/nodes") }} />
         <Toaster position="top-center" theme={dark ? "dark" : "light"} />
       </>
     )

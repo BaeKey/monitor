@@ -138,6 +138,17 @@ impl App {
         format!("{}{path}", self.base_path())
     }
 
+    pub fn password_login(&self) -> bool {
+        self.db.get("password_login").as_deref() != Some("off")
+    }
+
+    pub fn github_configured(&self) -> bool {
+        ["github_client_id", "github_client_secret"]
+            .iter()
+            .all(|key| self.db.get(key).is_some_and(|v| !v.trim().is_empty()))
+            && !auth::allowed_logins(&self.db.get("github_allowed_users").unwrap_or_default()).is_empty()
+    }
+
     pub fn public_page(&self) -> bool {
         self.db.get("public_page").as_deref() != Some("off")
     }
@@ -919,7 +930,7 @@ fn first_run(app: &App, url: &str) -> Result<()> {
 /// Sets a random 24-character admin password and signs every session out.
 fn new_password(db: &Db) -> Result<String> {
     let password = auth::random_token()[..24].to_owned();
-    db.replace_password(&auth::hash_password(&password)?)?;
+    db.reset_password(&auth::hash_password(&password)?)?;
     Ok(password)
 }
 
@@ -1451,7 +1462,9 @@ mod tests {
         assert_eq!(app.db.get("admin_password_hash").unwrap(), hash, "must not rotate on restart");
 
         app.db.create_session("s", i64::MAX).unwrap();
+        app.db.set("password_login", "off").unwrap();
         new_password(&app.db).unwrap();
+        assert!(app.password_login(), "CLI reset must restore password login");
         assert_ne!(app.db.get("admin_password_hash").unwrap(), hash, "a reset must rotate it");
         assert!(!app.db.session_valid("s"), "a reset must sign every session out");
     }

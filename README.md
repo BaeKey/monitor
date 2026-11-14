@@ -84,3 +84,21 @@ GitHub OAuth App 的 **Authorization callback URL** 应填写
 本次仅适配 hub 和内置管理后台，**未修改内置或第三方公开页主题**。
 公开页能否在子路径下完整运行仍取决于主题自身是否使用兼容子路径的资源、API、WebSocket 和导航地址；
 不兼容的主题需要单独适配，不能仅靠反向代理修复。
+
+## 仅使用 SSO 登录
+
+在后台「安全」中完整配置 GitHub Client ID、Client Secret 和允许登录的用户名，
+先确认 GitHub 登录可用，再关闭「允许密码登录」并保存。
+关闭后登录页仅显示 GitHub SSO 入口，密码登录 API 也会拒绝请求（不是只隐藏表单）。
+默认仍允许密码登录；现有登录会话不会因为关闭入口而自动退出，可在会话列表中主动撤销。
+仅 SSO 模式下不能清空必要的 GitHub 配置，须先重新启用密码登录，或在同次保存中启用。
+修改应急密码不会自动启用已关闭的入口。
+
+如果 SSO 故障，在服务器上执行以下命令恢复密码登录并生成新密码（同时登出全部会话）：
+
+```sh
+monitor-hub --db /实际路径/monitor.db --reset-password
+# 安装器部署也可使用：sudo sh install-hub.sh --reset-password
+```
+
+必须使用当前 hub 的数据库路径；无需删除 SSO 配置或重启 hub。

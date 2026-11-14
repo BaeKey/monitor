@@ -1066,17 +1066,50 @@ impl Db {
         put_setting(&self.conn(), key, value)
     }
 
+    /// Authentication settings are validated against their final values under
+    /// the writer lock. Disabling the fallback and clearing SSO concurrently
+    /// must never leave a panel with no configured login method.
+    pub fn save_login_settings(&self, values: &serde_json::Map<String, serde_json::Value>) -> Result<()> {
+        let keys = ["password_login", "github_client_id", "github_client_secret", "github_allowed_users"];
+        if !keys.iter().any(|key| values.contains_key(*key)) {
+            return Ok(());
+        }
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let next = |key: &str| -> Result<String> {
+            match values.get(key).and_then(serde_json::Value::as_str) {
+                Some(value) => Ok(value.to_owned()),
+                None => Ok(setting(&tx, key)?.unwrap_or_default()),
+            }
+        };
+        if next("password_login")? == "off"
+            && (next("github_client_id")?.trim().is_empty()
+                || next("github_client_secret")?.trim().is_empty()
+                || crate::auth::allowed_logins(&next("github_allowed_users")?).is_empty())
+        {
+            refuse!("禁用密码登录前，请完整配置 GitHub Client ID、Client Secret 和允许登录的用户；移除 SSO 配置前请先启用密码登录");
+        }
+        for key in keys {
+            if let Some(value) = values.get(key).and_then(serde_json::Value::as_str) {
+                put_setting(&tx, key, value)?;
+                if key == "github_allowed_users" {
+                    let ids = setting(&tx, crate::auth::GITHUB_IDS)?.unwrap_or_default();
+                    put_setting(&tx, crate::auth::GITHUB_IDS, &crate::auth::keep_listed(&ids, value))?;
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Stores the GitHub allow list and drops the bindings of the logins it no
     /// longer names, both or neither: a removal stored without its prune would
     /// leave the old account bound when the name is added back.
+    #[cfg(test)]
     pub fn set_github_allowed(&self, list: &str) -> Result<()> {
-        let mut conn = self.conn();
-        let tx = conn.transaction()?;
-        let ids = setting(&tx, crate::auth::GITHUB_IDS)?.unwrap_or_default();
-        put_setting(&tx, "github_allowed_users", list)?;
-        put_setting(&tx, crate::auth::GITHUB_IDS, &crate::auth::keep_listed(&ids, list))?;
-        tx.commit()?;
-        Ok(())
+        let mut values = serde_json::Map::new();
+        values.insert("github_allowed_users".into(), serde_json::Value::String(list.into()));
+        self.save_login_settings(&values)
     }
 
     /// The GitHub account id `login` is bound to, binding it to `id` when it has
@@ -2680,6 +2713,15 @@ impl Db {
     /// neither: a reset that stored the hash and then failed would report failure
     /// while the old password no longer works.
     pub fn replace_password(&self, hash: &str) -> Result<()> {
+        self.write_password(hash, false)
+    }
+
+    /// Local CLI recovery restores password login even if SSO is unavailable.
+    pub fn reset_password(&self, hash: &str) -> Result<()> {
+        self.write_password(hash, true)
+    }
+
+    fn write_password(&self, hash: &str, enable_login: bool) -> Result<()> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         tx.execute(
@@ -2687,6 +2729,9 @@ impl Db {
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             [hash],
         )?;
+        if enable_login {
+            put_setting(&tx, "password_login", "on")?;
+        }
         tx.execute("DELETE FROM session", [])?;
         tx.commit()?;
         Ok(())

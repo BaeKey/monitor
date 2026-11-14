@@ -179,6 +179,9 @@ pub async fn login(
     headers: HeaderMap,
     Json(body): Json<LoginBody>,
 ) -> Response {
+    if !app.password_login() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     let ip = client_ip(&app, &headers, peer.ip());
     if app.throttle.locked(ip) {
         return answer(StatusCode::TOO_MANY_REQUESTS, "尝试次数过多，稍后再试");
@@ -678,6 +681,35 @@ mod tests {
         signed_in.insert(header::COOKIE, format!("{COOKIE}={token}").parse().unwrap());
         logout(State(app.clone()), signed_in).await;
         assert!(!app.db.session_valid(&sha256(token)), "signing out ends the session server-side");
+    }
+
+    #[tokio::test]
+    async fn disabled_password_login_rejects_even_the_correct_password() {
+        let _gate = GATE_TESTS.lock().await;
+        let app = shared();
+        app.db.replace_password(&hash_password("correct-password").unwrap()).unwrap();
+        app.db.set("password_login", "off").unwrap();
+        let response = login(
+            State(app.clone()),
+            peer(),
+            HeaderMap::new(),
+            Json(LoginBody { password: "correct-password".into() }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(!response.headers().contains_key(header::SET_COOKIE));
+        assert!(axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap().is_empty());
+        assert!(app.db.sessions().unwrap().is_empty());
+        // A CLI reset both rotates the password and restores the login method.
+        app.db.reset_password(&hash_password("recovered-password").unwrap()).unwrap();
+        let response = login(
+            State(app),
+            peer(),
+            HeaderMap::new(),
+            Json(LoginBody { password: "recovered-password".into() }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     /// The state check precedes any request to GitHub, so a callback the
