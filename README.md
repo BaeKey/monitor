@@ -25,6 +25,26 @@
 本仓库锁定主题仓库已发布的 `v1.2.8` 提交，不依赖可变分支；该版本也移除了手机端版本查询、更新提醒和升级入口。
 费用、到期等显示开关同时约束列表、表格、详情和相关提醒；手机可跟随通用或独立配置。
 
+## Docker 镜像发布
+
+每次推送 `main` 或手动运行 `main` 的 release 工作流，都会先执行完整 CI，再构建并发布 Linux amd64/arm64 多架构镜像：
+
+- `ghcr.io/baekey/monitor:latest`
+- `ghcr.io/baekey/monitor:main`
+- `ghcr.io/baekey/monitor:sha-<完整提交号>`（用于固定版本或回滚）
+
+只有 `v*` 标签创建 GitHub 二进制 Release；普通 `main` 更新不创建版本 Release。
+GHCR 使用仓库 `GITHUB_TOKEN` 的 `packages:write` 权限，无需配置额外密钥。
+未配置 Docker Hub 凭据时只发布 GHCR，不会推送到 Docker Hub。
+
+```sh
+docker pull ghcr.io/baekey/monitor:latest
+# Compose 部署：使用新镜像重建容器，原有数据卷和配置保持不变。
+docker compose pull && docker compose up -d
+```
+
+仅拉取镜像不会更新已运行的容器；需要重建容器。首次发布后请确认 GitHub Packages 中镜像可见性为 Public，才能匿名拉取。
+
 ## 特性
 
 - 实时监控：秒级实时数据展示
