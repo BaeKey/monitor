@@ -3,6 +3,7 @@
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 
@@ -312,8 +313,8 @@ fn read_inside(root: &Path, relative: &str) -> Option<Vec<u8>> {
 }
 
 /// Whether a short names a directory under `<themes>`, which rules out an empty
-/// name and anything carrying a path separator. `default` is admitted: an
-/// installed copy of the built-in theme takes that name and is served in its
+/// name and anything carrying a path separator. An installed copy of the
+/// built-in theme takes its manifest short name and is served in its
 /// place, leaving the embedded one as the fallback beneath it.
 pub fn valid_short(short: &str) -> bool {
     !short.is_empty() && short.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
@@ -321,7 +322,7 @@ pub fn valid_short(short: &str) -> bool {
 
 fn external_theme(themes: &Path, short: &str) -> Option<PathBuf> {
     // The setting is empty until a theme is chosen, and names the default one.
-    let short = if short.is_empty() { "default" } else { short };
+    let short = if short.is_empty() { &builtin_theme().short } else { short };
     if !valid_short(short) {
         return None;
     }
@@ -353,13 +354,17 @@ fn manifest(root: &Path, short: &str) -> Option<Theme> {
     (theme.short == short).then_some(theme)
 }
 
-pub fn themes(app: &App) -> std::io::Result<Vec<Theme>> {
-    let built_in = Theme {
+fn builtin_theme() -> &'static Theme {
+    static THEME: OnceLock<Theme> = OnceLock::new();
+    THEME.get_or_init(|| Theme {
         builtin: true,
         ..serde_json::from_str(include_str!("../target/theme/theme.json"))
             .expect("the built-in theme manifest must be valid")
-    };
-    let mut list = vec![built_in];
+    })
+}
+
+pub fn themes(app: &App) -> std::io::Result<Vec<Theme>> {
+    let mut list = vec![builtin_theme().clone()];
 
     if let Ok(base) = app.themes.canonicalize() {
         for entry in fs::read_dir(&base)? {
@@ -374,7 +379,7 @@ pub fn themes(app: &App) -> std::io::Result<Vec<Theme>> {
                 // An installed copy of the built-in theme replaces it in the
                 // list rather than appearing beside it, matching `serve`, which
                 // reads the directory before the binary.
-                if theme.short == "default" {
+                if theme.short == builtin_theme().short {
                     list[0] = theme;
                 } else {
                     list.push(theme);
@@ -384,8 +389,11 @@ pub fn themes(app: &App) -> std::io::Result<Vec<Theme>> {
     }
 
     let configured = app.db.get("theme").unwrap_or_default();
-    let selected =
-        if list.iter().any(|theme| theme.short == configured) { configured } else { "default".into() };
+    let selected = if list.iter().any(|theme| theme.short == configured) {
+        configured
+    } else {
+        builtin_theme().short.clone()
+    };
     for theme in &mut list {
         theme.selected = theme.short == selected;
     }
@@ -628,7 +636,9 @@ pub fn preview(themes: &Path, short: &str) -> Option<Vec<u8>> {
     }
     // No directory, or one carrying no thumbnail of its own: the built-in theme
     // has its own embedded beside the assets it serves.
-    (short == "default").then(|| DefaultPreview::get(PREVIEW).map(|file| file.data.into_owned())).flatten()
+    (short == builtin_theme().short)
+        .then(|| DefaultPreview::get(PREVIEW).map(|file| file.data.into_owned()))
+        .flatten()
 }
 
 const PREVIEW: &str = "preview.png";
@@ -894,26 +904,29 @@ mod tests {
         // An installed copy of the built-in theme takes its place: it is read
         // from disk down to the thumbnail, and stands in the list where the
         // embedded copy was rather than beside it.
-        let built_in: &[u8] =
-            r#"{"name":"默认主题","short":"default","description":"","version":"9","author":"a","url":""}"#
-                .as_bytes();
+        let short = builtin_theme().short.as_str();
+        let built_in = serde_json::to_vec(&serde_json::json!({
+            "name": "Built-in override", "short": short, "description": "", "version": "9",
+            "author": "a", "url": ""
+        }))
+        .unwrap();
         install(
             &base,
-            pack(&[("theme.json", built_in), ("dist/index.html", b"d1"), ("preview.png", b"DISK")], None),
+            pack(&[("theme.json", &built_in), ("dist/index.html", b"d1"), ("preview.png", b"DISK")], None),
         )
         .unwrap();
         let mut app = App::for_test(crate::db::Db::open(":memory:").unwrap());
         app.themes = base.clone();
         let list = themes(&app).unwrap();
-        assert_eq!(list.iter().filter(|t| t.short == "default").count(), 1);
+        assert_eq!(list.iter().filter(|t| t.short == short).count(), 1);
         assert!(!list[0].builtin && list[0].version == "9" && list[0].selected);
-        assert_eq!(preview(&base, "default").unwrap(), b"DISK");
+        assert_eq!(preview(&base, short).unwrap(), b"DISK");
 
         // Deleting it leaves the embedded copy serving, which no directory can
         // be made to answer for.
-        remove(&base, "default").unwrap();
+        remove(&base, short).unwrap();
         assert!(themes(&app).unwrap()[0].builtin);
-        assert_ne!(preview(&base, "default"), Some(b"DISK".to_vec()));
+        assert_ne!(preview(&base, short), Some(b"DISK".to_vec()));
 
         // Deletion is the way back out.
         remove(&base, "aurora").unwrap();
@@ -1025,22 +1038,20 @@ mod tests {
         assert!(!selectable(&app, "aurora"), "a theme that is not installed is not selectable");
     }
 
-    /// A symlink in the themes directory that leads out of it is refused, and
-    /// what it leads to survives.
     #[test]
-    fn removing_a_theme_stays_inside_the_themes_directory() {
-        let tmp = crate::TempDir::new("remove");
-        let base = tmp.0.clone();
-        let (themes, outside) = (base.join("themes"), base.join("outside"));
-        fs::create_dir_all(themes.join("aurora")).unwrap();
-        fs::create_dir_all(&outside).unwrap();
-        std::os::unix::fs::symlink(&outside, themes.join("elsewhere")).unwrap();
-
-        assert!(remove(&themes, "elsewhere").is_err());
-        assert!(outside.exists(), "the symlink's target survives");
-        remove(&themes, "aurora").unwrap();
-        assert!(!themes.join("aurora").exists());
+    fn hex_is_the_builtin_fallback_without_changing_saved_choices() {
+        let app = App::for_test(crate::db::Db::open(":memory:").unwrap());
+        assert_eq!(builtin_theme().short, "hex");
+        assert!(selectable(&app, "hex"));
+        for choice in ["", "default", "missing", "hex"] {
+            app.db.set("theme", choice).unwrap();
+            let list = themes(&app).unwrap();
+            assert_eq!(list.iter().filter(|t| t.selected).count(), 1);
+            assert!(list[0].builtin && list[0].selected && list[0].short == "hex");
+            assert_eq!(app.db.get("theme").unwrap(), choice);
+        }
     }
+
     #[tokio::test]
     async fn subpath_shells_redirects_and_validators_follow_the_public_url() {
         let mut app = App::for_test(crate::db::Db::open(":memory:").unwrap());
@@ -1097,5 +1108,22 @@ mod tests {
         let body = std::str::from_utf8(&body).unwrap();
         assert!(body.contains("<base href=\"/monitor/admin/\">"));
         assert!(body.contains("./assets/"));
+    }
+
+    /// A symlink in the themes directory that leads out of it is refused, and
+    /// what it leads to survives.
+    #[test]
+    fn removing_a_theme_stays_inside_the_themes_directory() {
+        let tmp = crate::TempDir::new("remove");
+        let base = tmp.0.clone();
+        let (themes, outside) = (base.join("themes"), base.join("outside"));
+        fs::create_dir_all(themes.join("aurora")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, themes.join("elsewhere")).unwrap();
+
+        assert!(remove(&themes, "elsewhere").is_err());
+        assert!(outside.exists(), "the symlink's target survives");
+        remove(&themes, "aurora").unwrap();
+        assert!(!themes.join("aurora").exists());
     }
 }

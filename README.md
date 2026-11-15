@@ -4,6 +4,47 @@
 
 主题站：[monitor-themes.pages.dev](https://monitor-themes.pages.dev)，在线预览各个公开页主题，复制地址即可在面板安装。
 
+## 默认主题：HEX
+
+默认内置 [BaeKey/monitor-theme-hex](https://github.com/BaeKey/monitor-theme-hex) 的 HEX，保留 `hex` 主题标识和配置。
+主题源码仍在独立仓库维护；`web-theme.pin` 固定提交和源码 SHA-256，构建时从该提交编译，不复制源码进本仓库。
+已有数据库选择的其他主题保持不变；新部署或没有有效外置主题时使用内置 HEX。
+
+修改 HEX 后，将修改推送至主题仓库，再在本仓库执行：
+
+```sh
+./scripts/update-theme.sh          # 锁定 HEX main 最新提交；也可指定提交/分支/标签
+./scripts/theme.sh                 # npm ci + 构建主题并校验
+# 将更新后的 web-theme.pin 提交并合并到 main
+```
+
+初次从源码构建需要 Node.js 24+、npm、curl、tar、shasum。主题的许可证与 NOTICE 随构建保留在 `target/theme/`。
+主题仓库的提交不会自动改变已发布镜像；需要更新 pin 并重新构建，避免同一 hub 提交隐式使用不同主题。
+
+当前锁定的 HEX 已支持根路径及多层子路径公开页，API、WebSocket、资源和导航跟随 hub 注入的路径前缀。
+本仓库锁定主题仓库已发布的 `v1.2.8` 提交，不依赖可变分支；该版本也移除了手机端版本查询、更新提醒和升级入口。
+费用、到期等显示开关同时约束列表、表格、详情和相关提醒；手机可跟随通用或独立配置。
+
+## Docker 镜像发布
+
+每次推送 `main` 或手动运行 `main` 的 release 工作流，都会先执行完整 CI，再构建并发布 Linux amd64/arm64 多架构镜像：
+
+- `ghcr.io/baekey/monitor:latest`
+- `ghcr.io/baekey/monitor:main`
+- `ghcr.io/baekey/monitor:sha-<完整提交号>`（用于固定版本或回滚）
+
+只有 `v*` 标签创建 GitHub 二进制 Release；普通 `main` 更新不创建版本 Release。
+GHCR 使用仓库 `GITHUB_TOKEN` 的 `packages:write` 权限，无需配置额外密钥。
+未配置 Docker Hub 凭据时只发布 GHCR，不会推送到 Docker Hub。
+
+```sh
+docker pull ghcr.io/baekey/monitor:latest
+# Compose 部署：使用新镜像重建容器，原有数据卷和配置保持不变。
+docker compose pull && docker compose up -d
+```
+
+仅拉取镜像不会更新已运行的容器；需要重建容器。首次发布后请确认 GitHub Packages 中镜像可见性为 Public，才能匿名拉取。
+
 ## 特性
 
 - 实时监控：秒级实时数据展示
@@ -81,8 +122,8 @@ GitHub OAuth App 的 **Authorization callback URL** 应填写
 `https://example.com/monitor/api/auth/github/callback`。
 现有根路径 agent 连接方式不变；迁移到子路径时需要把 agent 的服务器地址同步改为带子路径的 URL。
 
-本次仅适配 hub 和内置管理后台，**未修改内置或第三方公开页主题**。
-公开页能否在子路径下完整运行仍取决于主题自身是否使用兼容子路径的资源、API、WebSocket 和导航地址；
+本分支的 hub、管理后台与当前内置 HEX 均支持子路径。
+第三方主题仍需自身使用兼容子路径的资源、API、WebSocket 和导航地址；
 不兼容的主题需要单独适配，不能仅靠反向代理修复。
 
 ## 仅使用 SSO 登录

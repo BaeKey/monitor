@@ -3157,11 +3157,11 @@ mod tests {
         let read = |short: &str| theme_config(state(), HeaderMap::new(), Path(short.to_owned()));
         let body = |r: Response| async { axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap() };
 
-        assert_eq!(&body(read("default").await).await[..], b"{}", "nothing saved reads as no overrides");
+        assert_eq!(&body(read("hex").await).await[..], b"{}", "nothing saved reads as no overrides");
         let values = json!({"notice": "维护中", "show_price": false}).as_object().unwrap().clone();
-        let saved = save_theme_config(Admin, state(), Path("default".into()), Json(values.clone())).await;
+        let saved = save_theme_config(Admin, state(), Path("hex".into()), Json(values.clone())).await;
         assert_eq!(saved.status(), StatusCode::NO_CONTENT);
-        let read_back: Value = serde_json::from_slice(&body(read("default").await).await).unwrap();
+        let read_back: Value = serde_json::from_slice(&body(read("hex").await).await).unwrap();
         assert_eq!(read_back, Value::Object(values.clone()));
 
         let missing = save_theme_config(Admin, state(), Path("aurora".into()), Json(values.clone())).await;
@@ -3170,7 +3170,7 @@ mod tests {
 
         app.db.set("public_page", "off").unwrap();
         assert_eq!(
-            read("default").await.status(),
+            read("hex").await.status(),
             StatusCode::UNAUTHORIZED,
             "a closed status page hides them too"
         );
